@@ -13,25 +13,51 @@
         android:orientation="vertical">
 
         <TextView
+            android:id="@+id/status_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#EEEEEE"
+            android:padding="8dp"
+            android:text="Status: Initializing..."
+            android:textSize="12sp"
+            android:fontFamily="monospace" />
+
+        <Spinner
+            android:id="@+id/wav_spinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_margin="8dp" />
+
+        <TextView
             android:id="@+id/my_text"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:layout_weight="2.5"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:padding="24dp"
             android:scrollbars="vertical"
             android:singleLine="false"
-            android:text="@string/hint"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
+            android:text="@string/hint" />
 
-        <Button
-            android:id="@+id/record_button"
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="0.5"
-            android:text="@string/start" />
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/record_button"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_margin="8dp"
+                android:text="@string/start" />
+
+            <Button
+                android:id="@+id/decode_wav_button"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_margin="8dp"
+                android:text="Decode WAV" />
+        </LinearLayout>
     </LinearLayout>
 
 

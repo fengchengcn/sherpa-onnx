@@ -8,4 +8,9 @@
     </string>
     <string name="start">Start</string>
     <string name="stop">Stop</string>
+    <string name="status_format">Mem: %1$dMB | Tokens/s: %2$s | RTF: %3$s</string>
+    <string name="decoding_format">Decoding %1$s…\nResult: %2$s</string>
+    <string name="finished_format">Finished: %1$s\nFinal Result: %2$s</string>
+    <string name="recognized_format">%1$d: %2$s</string>
+    <string name="recognized_concat_format">%1$s\n%2$d: %3$s</string>
 </resources>
