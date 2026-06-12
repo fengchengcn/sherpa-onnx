@@ -3,6 +3,7 @@
 // Copyright (c)  2025  Xiaomi Corporation
 
 #include "sherpa-onnx/csrc/offline-canary-model.h"
+#include "sherpa-onnx/csrc/ort-env.h"
 
 #include <algorithm>
 #include <cmath>
@@ -36,24 +37,22 @@ class OfflineCanaryModel::Impl {
  public:
   explicit Impl(const OfflineModelConfig &config)
       : config_(config),
-        env_(ORT_LOGGING_LEVEL_ERROR),
+        env_(CreateOrtEnv()),
         sess_opts_(GetSessionOptions(config)),
         allocator_{} {
-    {
-      auto buf = ReadFile(config.canary.encoder);
-      InitEncoder(buf.data(), buf.size());
-    }
+    encoder_sess_ = std::make_unique<Ort::Session>(
+        env_, SHERPA_ONNX_TO_ORT_PATH(config.canary.encoder), sess_opts_);
+    InitEncoder(nullptr, 0);
 
-    {
-      auto buf = ReadFile(config.canary.decoder);
-      InitDecoder(buf.data(), buf.size());
-    }
+    decoder_sess_ = std::make_unique<Ort::Session>(
+        env_, SHERPA_ONNX_TO_ORT_PATH(config.canary.decoder), sess_opts_);
+    InitDecoder(nullptr, 0);
   }
 
   template <typename Manager>
   Impl(Manager *mgr, const OfflineModelConfig &config)
       : config_(config),
-        env_(ORT_LOGGING_LEVEL_ERROR),
+        env_(CreateOrtEnv()),
         sess_opts_(GetSessionOptions(config)),
         allocator_{} {
     {
@@ -117,11 +116,13 @@ class OfflineCanaryModel::Impl {
   }
 
   std::vector<Ort::Value> GetInitialDecoderStates() {
-    std::array<int64_t, 3> shape{1, 0, 1024};
+    int32_t num_layers = meta_.num_decoder_layers;
+    int64_t hidden_size = meta_.decoder_hidden_size;
+    std::array<int64_t, 3> shape{1, 0, hidden_size};
 
     std::vector<Ort::Value> ans;
-    ans.reserve(6);
-    for (int32_t i = 0; i < 6; ++i) {
+    ans.reserve(num_layers);
+    for (int32_t i = 0; i < num_layers; ++i) {
       Ort::Value state = Ort::Value::CreateTensor<float>(
           Allocator(), shape.data(), shape.size());
 
@@ -139,8 +140,15 @@ class OfflineCanaryModel::Impl {
 
  private:
   void InitEncoder(void *model_data, size_t model_data_length) {
-    encoder_sess_ = std::make_unique<Ort::Session>(
-        env_, model_data, model_data_length, sess_opts_);
+    if (model_data) {
+      encoder_sess_ = std::make_unique<Ort::Session>(
+          env_, model_data, model_data_length, sess_opts_);
+    } else if (!encoder_sess_) {
+      SHERPA_ONNX_LOGE(
+          "Please pass model data or initialize the encoder session outside of "
+          "this function");
+      SHERPA_ONNX_EXIT(-1);
+    }
 
     GetInputNames(encoder_sess_.get(), &encoder_input_names_,
                   &encoder_input_names_ptr_);
@@ -178,11 +186,23 @@ class OfflineCanaryModel::Impl {
                                                "normalize_type");
     SHERPA_ONNX_READ_META_DATA(meta_.subsampling_factor, "subsampling_factor");
     SHERPA_ONNX_READ_META_DATA(meta_.feat_dim, "feat_dim");
+
+    SHERPA_ONNX_READ_META_DATA_WITH_DEFAULT(meta_.num_decoder_layers,
+                                            "num_decoder_layers", 6);
+    SHERPA_ONNX_READ_META_DATA_WITH_DEFAULT(meta_.decoder_hidden_size,
+                                            "decoder_hidden_size", 1024);
   }
 
   void InitDecoder(void *model_data, size_t model_data_length) {
-    decoder_sess_ = std::make_unique<Ort::Session>(
-        env_, model_data, model_data_length, sess_opts_);
+    if (model_data) {
+      decoder_sess_ = std::make_unique<Ort::Session>(
+          env_, model_data, model_data_length, sess_opts_);
+    } else if (!decoder_sess_) {
+      SHERPA_ONNX_LOGE(
+          "Please pass model data or initialize the decoder session outside of "
+          "this function");
+      SHERPA_ONNX_EXIT(-1);
+    }
 
     GetInputNames(decoder_sess_.get(), &decoder_input_names_,
                   &decoder_input_names_ptr_);

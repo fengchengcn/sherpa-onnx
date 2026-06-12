@@ -6,6 +6,7 @@
 #define SHERPA_ONNX_CSRC_ONLINE_STREAM_H_
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "kaldi-decoder/csrc/faster-decoder.h"
@@ -14,6 +15,7 @@
 #include "sherpa-onnx/csrc/features.h"
 #include "sherpa-onnx/csrc/online-ctc-decoder.h"
 #include "sherpa-onnx/csrc/online-paraformer-decoder.h"
+#include "sherpa-onnx/csrc/online-stream-state.h"
 #include "sherpa-onnx/csrc/online-transducer-decoder.h"
 
 namespace sherpa_onnx {
@@ -91,6 +93,12 @@ class OnlineStream {
   void SetStates(std::vector<Ort::Value> states);
   std::vector<Ort::Value> &GetStates();
 
+  void SetQnnStates(std::vector<OnlineStreamStateTensor> states);
+  std::vector<OnlineStreamStateTensor> &GetQnnStates();
+
+  void SetQnnResult(const OnlineTransducerDecoderResultNoOrt &r);
+  OnlineTransducerDecoderResultNoOrt &GetQnnResult();
+
   void SetNeMoDecoderStates(std::vector<Ort::Value> decoder_states);
   std::vector<Ort::Value> &GetNeMoDecoderStates();
 
@@ -110,6 +118,18 @@ class OnlineStream {
   std::vector<float> &GetParaformerFeatCache();
   std::vector<float> &GetParaformerEncoderOutCache();
   std::vector<float> &GetParaformerAlphaCache();
+
+  // Generic per-stream option mechanism (key-value string pairs).
+  void SetOption(const std::string &key, const std::string &value);
+  bool HasOption(const std::string &key) const;
+
+  // Returns the value for the given key, or an empty string if the key
+  // does not exist. No exception is thrown for missing keys.
+  const std::string &GetOption(const std::string &key) const;
+  int32_t GetOptionInt(const std::string &key,
+                       int32_t default_value = 0) const;
+  float GetOptionFloat(const std::string &key,
+                       float default_value = 0.0f) const;
 
  private:
   class Impl;

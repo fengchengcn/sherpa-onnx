@@ -52,7 +52,57 @@
 
 /**
  * @typedef {Object} OfflinePunctuationHandle
+ * @see src/offline-punctuation.cc
+ */
+
+/**
+ * @typedef {Object} LinearResamplerHandle
+ * @see src/resampler.cc
+ */
+
+/**
+ * @typedef {Object} OfflineTtsHandle
+ * @see src/non-streaming-tts.cc
+ */
+
+/**
+ * @typedef {Object} OnlinePunctuationHandle
  * @see src/punctuation.cc
+ */
+
+/**
+ * @typedef {Object} KeywordSpotterHandle
+ * @see src/keyword-spotter.cc
+ */
+
+/**
+ * @typedef {Object} SpeakerEmbeddingExtractorHandle
+ * @see src/speaker-identification.cc
+ */
+
+/**
+ * @typedef {Object} SpeakerEmbeddingManagerHandle
+ * @see src/speaker-identification.cc
+ */
+
+/**
+ * @typedef {Object} SpokenLanguageIdentificationHandle
+ * @see src/spoken-language-identification.cc
+ */
+
+/**
+ * @typedef {Object} OfflineSpeakerDiarizationHandle
+ * @see src/non-streaming-speaker-diarization.cc
+ */
+
+/**
+ * @typedef {Object} OfflineSpeechDenoiserHandle
+ * @see src/non-streaming-speech-denoiser.cc
+ */
+
+/**
+ * @typedef {Object} OnlineSpeechDenoiserHandle
+ * @see src/online-speech-denoiser.cc
  */
 
 /**
@@ -235,6 +285,16 @@
  */
 
 /**
+ * Offline Cohere Transcribe model config
+ * @typedef {Object} OfflineCohereTranscribeModelConfig
+ * @property {string} [encoder]
+ * @property {string} [decoder]
+ * @property {string} [language]
+ * @property {number} [usePunct]
+ * @property {number} [useItn]
+ */
+
+/**
  * Offline model config.
  * @typedef {Object} OfflineModelConfig
  * @property {OfflineTransducerModelConfig} [transducer]
@@ -251,6 +311,7 @@
  * @property {OfflineMoonshineModelConfig} [moonshine]
  * @property {OfflineTdnnModelConfig} [tdnn]
  * @property {OfflineSenseVoiceModelConfig} [senseVoice]
+ * @property {OfflineCohereTranscribeModelConfig} [cohereTranscribe]
  * @property {string} [tokens]
  * @property {number} [numThreads]
  * @property {boolean|number} [debug]
@@ -368,12 +429,29 @@
  */
 
 /**
+ * @typedef {Object} GenerationConfig
+ * @property {number=} silenceScale
+ * @property {number=} speed
+ * @property {number=} sid
+ * @property {number=} numSteps
+ *
+ * @property {Float32Array=} referenceAudio
+ * @property {number=} referenceSampleRate
+ * @property {string=} referenceText
+ *
+ * @property {{[key: string]: number | string}} [extra]
+ */
+
+
+/**
  * TTS request object passed to generate/generateAsync.
  * @typedef {Object} TtsRequest
  * @property {string} text - Input text to synthesize.
  * @property {number} sid - Speaker id (integer).
  * @property {number} speed - Playback speed (float).
- * @property {boolean} [enableExternalBuffer=true] - Whether to use an external buffer.
+ * @property {boolean} [enableExternalBuffer=true] - Whether to use an external
+ *           buffer.
+ * @property {GenerationConfig=} generationConfig - Optional
  */
 
 /**
@@ -485,12 +563,40 @@
  */
 
 /**
+ * @typedef {Object} OfflineTtsZipvoiceModelConfig
+ * @property {string} [tokens]
+ * @property {string} [encoder]
+ * @property {string} [decoder]
+ * @property {string} [vocoder]
+ * @property {string} [dataDir]
+ * @property {string} [lexicon]
+ * @property {number} [featScale]
+ * @property {number} [tShift]
+ * @property {number} [targetRms]
+ * @property {number} [guidanceScale]
+ */
+
+/**
+ * @typedef {Object} OfflineTtsPocketModelConfig
+ * @property {string} [lmFlow]
+ * @property {string} [lmMain]
+ * @property {string} [encoder]
+ * @property {string} [decoder]
+ * @property {string} [textConditioner]
+ * @property {string} [vocabJson]
+ * @property {string} [tokenScoresJson]
+ * @property {number} [voiceEmbeddingCacheCapacity]
+ */
+
+/**
  * Offline TTS model config
  * @typedef {Object} OfflineTtsModelConfig
  * @property {OfflineTtsVitsModelConfig} [vits]
  * @property {OfflineTtsMatchaModelConfig} [matcha]
  * @property {OfflineTtsKokoroModelConfig} [kokoro]
  * @property {OfflineTtsKittenModelConfig} [kitten]
+ * @property {OfflineTtsZipvoiceModelConfig} [zipvoice]
+ * @property {OfflineTtsPocketModelConfig} [pocket]
  */
 
 /**
@@ -511,16 +617,30 @@
 
 /**
  * Offline Speech Denoiser model config
+ * @typedef {Object} OfflineSpeechDenoiserDpdfNetModelConfig
+ * @property {string} [model]
+ */
+
+/**
+ * Offline Speech Denoiser model config
  * @typedef {Object} OfflineSpeechDenoiserModelConfig
  * @property {OfflineSpeechDenoiserGtcrnModelConfig} [gtcrn]
+ * @property {OfflineSpeechDenoiserDpdfNetModelConfig} [dpdfnet]
+ * @property {number} [numThreads]
+ * @property {boolean|number} [debug]
+ * @property {string} [provider]
  */
 
 /**
  * Offline Speech Denoiser configuration (partial).
  * @typedef {Object} OfflineSpeechDenoiserConfig
  * @property {OfflineSpeechDenoiserModelConfig} [model]
- * @property {number} [numThreads]
- * @property {string} [provider]
+ */
+
+/**
+ * Online Speech Denoiser configuration (partial).
+ * @typedef {Object} OnlineSpeechDenoiserConfig
+ * @property {OfflineSpeechDenoiserModelConfig} [model]
  */
 
 /**

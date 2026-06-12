@@ -18,6 +18,7 @@ data class OnlineTransducerModelConfig(
     var encoder: String = "",
     var decoder: String = "",
     var joiner: String = "",
+    var qnnConfig: QnnConfig = QnnConfig(),
 )
 
 data class OnlineParaformerModelConfig(
@@ -120,14 +121,7 @@ class OnlineRecognizer(
     fun isEndpoint(stream: OnlineStream) = isEndpoint(ptr, stream.ptr)
     fun isReady(stream: OnlineStream) = isReady(ptr, stream.ptr)
     fun getResult(stream: OnlineStream): OnlineRecognizerResult {
-        val objArray = getResult(ptr, stream.ptr)
-
-        val text = objArray[0] as String
-        val tokens = objArray[1] as Array<String>
-        val timestamps = objArray[2] as FloatArray
-        val ysProbs = objArray[3] as FloatArray
-
-        return OnlineRecognizerResult(text = text, tokens = tokens, timestamps = timestamps, ysProbs = ysProbs)
+        return getResult(ptr, stream.ptr)
     }
 
     private external fun delete(ptr: Long)
@@ -146,12 +140,15 @@ class OnlineRecognizer(
     private external fun decode(ptr: Long, streamPtr: Long)
     private external fun isEndpoint(ptr: Long, streamPtr: Long): Boolean
     private external fun isReady(ptr: Long, streamPtr: Long): Boolean
-    private external fun getResult(ptr: Long, streamPtr: Long): Array<Any>
+    private external fun getResult(ptr: Long, streamPtr: Long): OnlineRecognizerResult
 
     companion object {
         init {
             System.loadLibrary("sherpa-onnx-jni")
         }
+
+        @JvmStatic
+        external fun prependAdspLibraryPath(newPath: String) // for qnn
     }
 }
 
@@ -193,6 +190,14 @@ by following the code)
 8 - csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20 (Bilingual, Chinese + English)
     https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20
     encoder int8, decoder/joiner float32
+
+9025 - sherpa-onnx-qnn-streaming-zipformer-transducer-zh-en-2023-03-20-chunk-size-32-android-aarch64
+    QNN model libs with writable binary context files
+    libencoder.so, libdecoder.so, libjoiner.so
+
+9026 - sherpa-onnx-qnn-SM8850-binary-streaming-zipformer-transducer-zh-en-2023-03-20-chunk-size-32
+    QNN binary context files only
+    encoder.bin, decoder.bin, joiner.bin
 
  */
 fun getModelConfig(type: Int): OnlineModelConfig? {
@@ -547,6 +552,183 @@ fun getModelConfig(type: Int): OnlineModelConfig? {
             )
         }
 
+        29 -> {
+            val modelDir = "sherpa-onnx-streaming-zipformer-bn-vosk-2026-02-09"
+            return OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    encoder = "$modelDir/encoder.onnx",
+                    decoder = "$modelDir/decoder.onnx",
+                    joiner = "$modelDir/joiner.onnx",
+                ),
+                tokens = "$modelDir/tokens.txt",
+                modelType = "zipformer2",
+            )
+        }
+
+        30 -> {
+            val modelDir = "sherpa-onnx-nemotron-speech-streaming-en-0.6b-80ms-int8-2026-04-25"
+            return OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    encoder = "$modelDir/encoder.int8.onnx",
+                    decoder = "$modelDir/decoder.int8.onnx",
+                    joiner = "$modelDir/joiner.int8.onnx",
+                ),
+                tokens = "$modelDir/tokens.txt",
+            )
+        }
+
+        31 -> {
+            val modelDir = "sherpa-onnx-nemotron-speech-streaming-en-0.6b-160ms-int8-2026-04-25"
+            return OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    encoder = "$modelDir/encoder.int8.onnx",
+                    decoder = "$modelDir/decoder.int8.onnx",
+                    joiner = "$modelDir/joiner.int8.onnx",
+                ),
+                tokens = "$modelDir/tokens.txt",
+            )
+        }
+
+        32 -> {
+            val modelDir = "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25"
+            return OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    encoder = "$modelDir/encoder.int8.onnx",
+                    decoder = "$modelDir/decoder.int8.onnx",
+                    joiner = "$modelDir/joiner.int8.onnx",
+                ),
+                tokens = "$modelDir/tokens.txt",
+            )
+        }
+
+        33 -> {
+            val modelDir = "sherpa-onnx-nemotron-speech-streaming-en-0.6b-1120ms-int8-2026-04-25"
+            return OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    encoder = "$modelDir/encoder.int8.onnx",
+                    decoder = "$modelDir/decoder.int8.onnx",
+                    joiner = "$modelDir/joiner.int8.onnx",
+                ),
+                tokens = "$modelDir/tokens.txt",
+            )
+        }
+
+        9025 -> {
+            val modelDir =
+                "sherpa-onnx-qnn-streaming-zipformer-transducer-zh-en-2023-03-20-chunk-size-32-android-aarch64"
+            return OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    encoder = "$modelDir/libencoder.so",
+                    decoder = "$modelDir/libdecoder.so",
+                    joiner = "$modelDir/libjoiner.so",
+                    qnnConfig = QnnConfig(
+                        backendLib = "libQnnHtp.so",
+                        systemLib = "libQnnSystem.so",
+                        // The following three *.bin files are generated during the first run
+                        // and are used to replace the corresponding *.so files in later runs
+                        contextBinary = "$modelDir/encoder.bin,$modelDir/decoder.bin,$modelDir/joiner.bin",
+                    ),
+                ),
+                tokens = "$modelDir/tokens.txt",
+                provider = "qnn",
+                modelType = "zipformer",
+            )
+        }
+
+        9026 -> {
+            // for Xiaomi 17 Pro
+            val modelDir =
+                "sherpa-onnx-qnn-SM8850-binary-streaming-zipformer-transducer-zh-en-2023-03-20-chunk-size-32"
+            return OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    qnnConfig = QnnConfig(
+                        backendLib = "libQnnHtp.so",
+                        systemLib = "libQnnSystem.so",
+                        contextBinary = "$modelDir/encoder.bin,$modelDir/decoder.bin,$modelDir/joiner.bin",
+                    ),
+                ),
+                tokens = "$modelDir/tokens.txt",
+                provider = "qnn",
+                modelType = "zipformer",
+            )
+        }
+
+        9027 -> {
+            val modelDir =
+                "sherpa-onnx-qnn-x-asr-streaming-zipformer-transducer-zh-en-2026-06-05-chunk-size-480ms-android-aarch64"
+            return OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    encoder = "$modelDir/libencoder.so",
+                    decoder = "$modelDir/libdecoder.so",
+                    joiner = "$modelDir/libjoiner.so",
+                    qnnConfig = QnnConfig(
+                        backendLib = "libQnnHtp.so",
+                        systemLib = "libQnnSystem.so",
+                        contextBinary = "$modelDir/encoder.bin,$modelDir/decoder.bin,$modelDir/joiner.bin",
+                    ),
+                ),
+                tokens = "$modelDir/tokens.txt",
+                provider = "qnn",
+                modelType = "zipformer",
+            )
+        }
+
+        9028 -> {
+            val modelDir =
+                "sherpa-onnx-qnn-x-asr-streaming-zipformer-transducer-zh-en-punct-2026-06-05-chunk-size-480ms-android-aarch64"
+            return OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    encoder = "$modelDir/libencoder.so",
+                    decoder = "$modelDir/libdecoder.so",
+                    joiner = "$modelDir/libjoiner.so",
+                    qnnConfig = QnnConfig(
+                        backendLib = "libQnnHtp.so",
+                        systemLib = "libQnnSystem.so",
+                        contextBinary = "$modelDir/encoder.bin,$modelDir/decoder.bin,$modelDir/joiner.bin",
+                    ),
+                ),
+                tokens = "$modelDir/tokens.txt",
+                provider = "qnn",
+                modelType = "zipformer",
+            )
+        }
+
+        9029 -> {
+            // for Xiaomi 17 Pro
+            val modelDir =
+                "sherpa-onnx-qnn-SM8850-binary-x-asr-streaming-zipformer-transducer-zh-en-2026-06-05-chunk-size-480ms"
+            return OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    qnnConfig = QnnConfig(
+                        backendLib = "libQnnHtp.so",
+                        systemLib = "libQnnSystem.so",
+                        contextBinary = "$modelDir/encoder.bin,$modelDir/decoder.bin,$modelDir/joiner.bin",
+                    ),
+                ),
+                tokens = "$modelDir/tokens.txt",
+                provider = "qnn",
+                modelType = "zipformer",
+            )
+        }
+
+        9030 -> {
+            // for Xiaomi 17 Pro
+            val modelDir =
+                "sherpa-onnx-qnn-SM8850-binary-x-asr-streaming-zipformer-transducer-zh-en-punct-2026-06-05-chunk-size-480ms"
+            return OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    qnnConfig = QnnConfig(
+                        backendLib = "libQnnHtp.so",
+                        systemLib = "libQnnSystem.so",
+                        contextBinary = "$modelDir/encoder.bin,$modelDir/decoder.bin,$modelDir/joiner.bin",
+                    ),
+                ),
+                tokens = "$modelDir/tokens.txt",
+                provider = "qnn",
+                modelType = "zipformer",
+            )
+        }
+
         1000 -> {
             val modelDir = "sherpa-onnx-rk3588-streaming-zipformer-bilingual-zh-en-2023-02-20"
             return OnlineModelConfig(
@@ -612,4 +794,3 @@ fun getEndpointConfig(): EndpointConfig {
         rule3 = EndpointRule(false, 0.0f, 20.0f)
     )
 }
-
