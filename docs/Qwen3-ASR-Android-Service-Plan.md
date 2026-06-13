@@ -122,6 +122,142 @@ LLM Decoder (28层 Qwen3, ~470M params, ~722MB int8, KV-cache 自回归)
 | 模型分发 | **国内 CDN/OSS 下载** | GitHub Releases 国内不稳定；断点续传 + SHA256 校验 |
 | 客户端集成 | **轻量 .aar SDK** | 屏蔽 AIDL/Binder/DeathRecipient 细节；处理华为 ROM 后台限制 |
 | 识别模式 (MVP) | **短句一次性提交** | MVP 仅短句；v2 通过客户端 VAD 自动断句实现流式体验（详见 §2.3.2） |
+| 录音与麦克风管理 | **客户端负责** | Service 保持纯推理引擎定位；各 APP 录音模式差异大（详见 §2.1） |
+
+### 2.1 录音与麦克风管理：为什么在客户端而非服务端？
+
+这是整个架构中最关键的边界决策之一。**录音和麦克风管理放在各个调用方 APP 里，Service 只做推理。**
+
+#### 决策理由
+
+**理由 1：Qwen3-ASR 是离线识别模型，不是流式模型**
+
+这是决定性的因素。Qwen3-ASR 的工作方式是「接收完整音频 → 一次性推理 → 输出完整文本」：
+
+```
+客户端录音:  [████████████████]  用户说完 → 得到完整 FloatArray
+              ↓
+AIDL 传输:   ParcelFileDescriptor → 服务端读取
+              ↓
+服务端推理:  输入端: 完整音频 → 输出端: 完整文本
+```
+
+它不是流式 ASR 模型，推理过程中不能「边听边出字」。即使 Service 直接持有麦克风，也做不到实时出字 —— 必须等用户说完才能开始推理。因此在 Service 里录音并不能带来流式体验，反而增加了架构复杂度。
+
+**理由 2：不同调用方的录音模式差异太大**
+
+| 调用方 | 录音模式 | 持续时间 | 特殊需求 |
+|--------|---------|---------|---------|
+| 输入法 | 按住说话，松手提交 | 2-8s | 需要与键盘 UI 深度绑定，松手即停止 |
+| 语音搜索 | 点击按钮，说一句话 | 2-5s | 需要录音倒计时 UI + 音量指示 |
+| 语音消息 | 按按钮开始，再按结束 | 3-15s | 需要波形可视化 |
+| 会议记录 | 持续录音，自动断句 | 数分钟 | 需要 VAD 自动切句 + 逐句提交 |
+| 录音笔 | 长时间持续录制 | 数十分钟 | 需要边录边存文件，防止数据丢失 |
+
+把这些全部塞进 Service，Service 的 API 会爆炸：
+
+```kotlin
+// ❌ 反模式：如果把录音集中到 Service
+interface ISherpaAsrService {
+    fun startRecordingForInputMethod(callback: ...)     // 按住说话
+    fun startRecordingForMeeting(vadConfig: ..., cb: ...) // 会议模式
+    fun startRecordingForVoiceSearch(maxDuration: Int, cb: ...) // 搜索模式
+    fun startRecordingWithManualStop(cb: ...)           // 手动停止
+    fun getAmplitude(): Float                           // 音量指示
+    fun cancelRecording()                               // 取消
+    // ... 每来一种新场景就加一个方法，永无止境
+}
+```
+
+而放在客户端，每个 APP 只需在自己合适的时机调用同一个接口：
+
+```kotlin
+// ✅ 正确：Service 只暴露一个推理接口
+client.recognize(floatArray, sampleRate = 16000)
+```
+
+**理由 3：Android 麦克风是互斥资源，集中管理没有收益**
+
+Android 的麦克风同一时间只能被一个进程使用。无论录音在 Service 还是在客户端，都面临着同样的互斥约束。但：
+
+- **客户端录音**：互斥自然发生，每个 APP 各自持有 `AudioRecord`，用完释放。不同 APP 想同时用？各自录音，排队提交给 Service 推理。
+- **Service 录音**：需要额外的排队和调度机制来处理多个 APP 同时请求录音的情况，而且请求失败的 APP 拿不到任何反馈。
+
+**理由 4：客户端可以做任意预处理，Service 保持通用**
+
+```
+客户端可以做 (不可枚举):
+  ├── 麦克风阵列波束成形
+  ├── 降噪 (RNNoise / 自研算法)
+  ├── 回声消除 (AEC)
+  ├── 自动增益控制 (AGC)
+  ├── 自定义 VAD 断句
+  ├── 音频格式转换 (任意采样率 → 16kHz)
+  └── 双声道 → 单声道 混音/通道选择
+
+Service 只做:
+  └── FloatArray → 推理 → 文本
+```
+
+如果 Service 持有麦克风，所有这些预处理都必须以配置参数的形式传入 Service，API 会极度膨胀。而保持「客户端给什么音频，Service 就识别什么」的契约，Service 永远不需要知道音频是怎么来的。
+
+#### 客户端录音的两种接入方式
+
+为了让简单场景也易于接入，SDK 提供**可选的**录音工具类 `AudioRecorderHelper`：
+
+**方式 1：使用 SDK 内置录音工具（简单场景）**
+
+```kotlin
+// 输入法 / 语音搜索等简单场景 —— 一行代码搞定录音
+val recorder = AudioRecorderHelper(context)
+recorder.startRecordingAsync(
+    maxDurationMs = 15_000,
+    onAmplitudeUpdate = { amp -> showVolumeIndicator(amp) },
+    onComplete = { floatArray ->
+        val text = client.recognize(floatArray, sampleRate = 16000)
+        showResult(text)
+    }
+)
+// 用户松手 → recorder.stopRecording() → 自动回调 onComplete
+```
+
+**方式 2：APP 自己管理录音（复杂场景）**
+
+```kotlin
+// 会议记录 / 定制 UI 等复杂场景 —— APP 完全掌控录音生命周期
+val audioRecorder = AudioRecord(
+    MediaRecorder.AudioSource.MIC,
+    16000, AudioFormat.CHANNEL_IN_MONO,
+    AudioFormat.ENCODING_PCM_FLOAT, bufferSize
+)
+audioRecorder.startRecording()
+
+// APP 自定义：降噪、VAD 切句、实时波形...
+val processedAudio = applyCustomNoiseReduction(rawAudio)
+val sentences = customVad.split(processedAudio)
+
+// 切好的每一句独立提交给 Service
+sentences.forEach { sentence ->
+    client.recognize(sentence, sampleRate = 16000)
+}
+audioRecorder.stop()
+```
+
+> **设计原则**：SDK 内置的 `AudioRecorderHelper` 定位为「降低入门门槛」，而非「限制能力」。需要自定义录音逻辑的 APP 完全不受影响 —— 它只需要最终拿到 `FloatArray`，调用 `client.recognize()` 即可。
+
+#### 总结
+
+| 维度 | 客户端录音（当前设计） | Service 录音（备选） |
+|------|----------------------|---------------------|
+| Service 复杂度 | **低** — 只做推理 | 高 — 需要麦克风状态机 + 排队 |
+| 客户端灵活性 | **高** — 任意预处理，任意 UI | 低 — 受限 Service API |
+| 简单场景接入成本 | 中 — 需了解录音 API | 低 — 调用 Service 即可 |
+| 简单场景接入成本（SDK 封装后） | **低** — 一行代码 | 低 |
+| 多 APP 并发 | 各自录音，提交推理排队 | 麦克风互斥，Service 内部排队 |
+| 音频预处理 | **自由** — 客户端任意处理 | 受限 — 需把所有预处理参数化传入 Service |
+| 麦克风权限 | 各 APP 自行申请 | 集中在 Service APK |
+| 流式识别（v2） | 客户端持续录音 + VAD 切句 + 逐句提交 | Service 持续录音 + VAD 切句 + 逐句推理 |
+| 推荐度 | ⭐⭐⭐ **采用** | — 
 
 ### MVP 范围与二期规划
 
@@ -582,6 +718,7 @@ android/SherpaOnnxAsrService/
 │       ├── RecognitionCallback.kt           # 结果回调接口
 │       ├── ServiceConnectionManager.kt      # Binder 连接/重连/DeathRecipient 管理
 │       ├── AudioDataProvider.kt             # 音频数据写入 pipe，传递 ParcelFileDescriptor
+│       ├── AudioRecorderHelper.kt           # [可选] 内置录音工具（降低简单场景接入成本）
 │       ├── VadSentenceSplitter.kt           # [v2] VAD 断句模块 (Silero/WebRTC)
 │       ├── RecognitionRequest.kt            # 请求 POJO
 │       └── RecognitionResult.kt             # 结果 POJO
@@ -1099,6 +1236,247 @@ class SherpaSpeechClient(private val context: Context) {
 }
 ```
 
+```kotlin
+// ======== AudioRecorderHelper.kt — 可选的内置录音工具 ========
+// 定位：降低简单场景的接入成本。复杂场景（会议录制、自定义降噪）可自行实现录音。
+// 此工具不是必须使用的 —— APP 可以完全自己管理 AudioRecord，只需最终调用 client.recognize()。
+
+class AudioRecorderHelper(
+    private val context: Context,
+    private val sampleRate: Int = 16000,
+    private val channelConfig: Int = AudioFormat.CHANNEL_IN_MONO,
+    private val audioFormat: Int = AudioFormat.ENCODING_PCM_FLOAT,
+) {
+    private var audioRecord: AudioRecord? = null
+    private var recordingThread: Thread? = null
+    @Volatile private var isRecording = false
+    private var amplitudeListener: ((Float) -> Unit)? = null
+
+    // 计算所需缓冲区大小
+    private val minBufferSize: Int = AudioRecord.getMinBufferSize(
+        sampleRate, channelConfig, audioFormat
+    ).coerceAtLeast(sampleRate * 2) // 至少 0.5s 缓冲, 16kHz float = 每采样 4 bytes
+
+    // 实时音量回调（用于 UI 波形/音量指示）
+    fun setOnAmplitudeListener(listener: (Float) -> Unit) {
+        amplitudeListener = listener
+    }
+
+    /**
+     * 同步录制，返回完整 FloatArray。
+     * 调用线程会阻塞直到 stopRecording() 被调用（通常在另一个线程/回调中调用）。
+     *
+     * ⚠️ 警告：不建议在主线程调用。如果音频过长可能 OOM。
+     * 推荐使用 [startRecordingAsync] 替代。
+     */
+    fun startRecording(maxDurationMs: Long = 15_000): FloatArray? {
+        // 检查并请求权限
+        if (!ensurePermission()) return null
+
+        audioRecord = AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            sampleRate, channelConfig, audioFormat,
+            minBufferSize
+        )
+
+        if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e(TAG, "AudioRecord 初始化失败")
+            return null
+        }
+
+        val buffer = ShortArray(minBufferSize / 2) // 16-bit 采样用 Short 读, 再转 Float
+        val allSamples = mutableListOf<Float>()
+        val startedAt = System.currentTimeMillis()
+        audioRecord?.startRecording()
+        isRecording = true
+
+        while (isRecording) {
+            val readSize = audioRecord?.read(buffer, 0, buffer.size) ?: break
+            if (readSize > 0) {
+                // 16-bit PCM → Float [-1.0, 1.0]
+                for (i in 0 until readSize) {
+                    allSamples.add(buffer[i] / 32768f)
+                }
+                // 实时音量指示
+                var sumSq = 0f
+                for (i in 0 until readSize) { val s = buffer[i] / 32768f; sumSq += s * s }
+                amplitudeListener?.invoke(sqrt(sumSq / readSize))
+            }
+            // 时长保护
+            if (allSamples.size > (maxDurationMs * sampleRate / 1000)) break
+        }
+
+        audioRecord?.stop()
+        return allSamples.toFloatArray()
+    }
+
+    /**
+     * 异步录制。录音在后台线程进行，完成后通过 [onComplete] 回调。
+     * 调用 [stopRecording] 来结束录音。
+     *
+     * @param maxDurationMs 最大录音时长（防止 OOM），默认 15s
+     * @param onAmplitudeUpdate 可选，实时音量回调（主线程），用于 UI 音量指示器
+     * @param onComplete 录音完成回调（主线程），参数为完整的 FloatArray
+     * @param onError 错误回调（主线程）
+     */
+    fun startRecordingAsync(
+        maxDurationMs: Long = 15_000,
+        onAmplitudeUpdate: ((Float) -> Unit)? = null,
+        onComplete: (FloatArray) -> Unit,
+        onError: ((String) -> Unit)? = null,
+    ) {
+        if (!ensurePermission()) {
+            onError?.let { Handler(Looper.getMainLooper()).post { it("录音权限被拒绝") } }
+            return
+        }
+
+        audioRecord = AudioRecord(
+            MediaRecorder.AudioSource.MIC,
+            sampleRate, channelConfig, audioFormat,
+            minBufferSize
+        )
+
+        if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+            onError?.let { Handler(Looper.getMainLooper()).post { it("AudioRecord 初始化失败") } }
+            return
+        }
+
+        recordingThread = thread {
+            val buffer = ShortArray(minBufferSize / 2)
+            val allSamples = mutableListOf<Float>()
+            audioRecord?.startRecording()
+            isRecording = true
+
+            while (isRecording) {
+                val readSize = audioRecord?.read(buffer, 0, buffer.size) ?: break
+                if (readSize > 0) {
+                    for (i in 0 until readSize) allSamples.add(buffer[i] / 32768f)
+                    // 音量回调到主线程
+                    var sumSq = 0f
+                    for (i in 0 until readSize) { val s = buffer[i] / 32768f; sumSq += s * s }
+                    val amp = sqrt(sumSq / readSize)
+                    Handler(Looper.getMainLooper()).post { onAmplitudeUpdate?.invoke(amp) }
+                }
+                if (allSamples.size > (maxDurationMs * sampleRate / 1000)) break
+            }
+
+            audioRecord?.stop()
+            val result = allSamples.toFloatArray()
+            Handler(Looper.getMainLooper()).post { onComplete(result) }
+        }
+    }
+
+    /**
+     * 停止录音。如果使用 [startRecordingAsync]，录音线程结束并通过 onComplete 回调返回结果。
+     * 如果使用 [startRecording]（同步），调用后 startRecording() 返回结果。
+     */
+    fun stopRecording() {
+        isRecording = false
+        recordingThread?.join(2000) // 等待录音线程结束，最多 2s
+        audioRecord?.release()
+        audioRecord = null
+    }
+
+    /** 获取当前录音状态 */
+    fun isActive(): Boolean = isRecording
+
+    private fun ensurePermission(): Boolean {
+        val hasPermission = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        return hasPermission
+    }
+
+    companion object {
+        private const val TAG = "AudioRecorderHelper"
+    }
+}
+```
+
+### 5.6 客户端 SDK 完整使用示例
+
+**场景 1：输入法（按住说话，松手识别）—— 使用 SDK 内置录音工具**
+
+```kotlin
+class ImeVoiceButton(context: Context) : View(context) {
+    private val client = SherpaSpeechClient(context)
+    private val recorder = AudioRecorderHelper(context)
+
+    init {
+        client.connect()
+        setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    // 按下开始录音
+                    recorder.startRecordingAsync(
+                        maxDurationMs = 10_000,
+                        onAmplitudeUpdate = { amp -> updateVolumeBar(amp) },
+                        onComplete = { audioData ->
+                            val text = client.recognize(audioData, sampleRate = 16000, language = "zh")
+                            commitText(text)
+                        }
+                    )
+                }
+                MotionEvent.ACTION_UP -> {
+                    // 松手停止录音 → 自动触发 onComplete → 自动识别
+                    recorder.stopRecording()
+                }
+            }
+            true
+        }
+    }
+}
+```
+
+**场景 2：会议记录（持续录音 + 自定义 VAD 断句）—— APP 自己录音**
+
+```kotlin
+class MeetingRecorder(context: Context) {
+    private val client = SherpaSpeechClient(context)
+    private val audioRecord = AudioRecord(
+        MediaRecorder.AudioSource.MIC, 16000,
+        AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_FLOAT, bufferSize
+    )
+    // 使用 client_sdk 提供的 VAD 断句模块 (v2)
+    private val vadSplitter = VadSentenceSplitter(
+        VadConfig(model = VadModel.WEBRTC, silenceTimeoutMs = 800)
+    )
+
+    fun startMeeting() {
+        client.connect()
+        audioRecord.startRecording()
+        thread {
+            val buffer = FloatArray(bufferSize)
+            while (isRecording) {
+                audioRecord.read(buffer, 0, buffer.size, AudioRecord.READ_BLOCKING)
+                // VAD 自动检测断句
+                vadSplitter.feedAudio(buffer) { sentence ->
+                    // 每检测到一个完整句子，立即提交识别
+                    client.recognizeAsync(sentence, sampleRate = 16000, language = "zh") { result ->
+                        appendToTranscript(result.text)  // 实时出字
+                    }
+                }
+            }
+        }
+    }
+
+    fun stopMeeting() {
+        isRecording = false
+        audioRecord.stop()
+    }
+}
+```
+
+**场景 3：无需录音的文本转写（已有音频文件）**
+
+```kotlin
+// 从文件读取音频，无需麦克风
+val audioData = AudioFileReader.readFloatArray(File("/sdcard/recording.wav"), targetSampleRate = 16000)
+val text = client.recognize(audioData, sampleRate = 16000, language = "zh")
+```
+
+---
+
 ---
 
 ## 六、性能评估
@@ -1175,7 +1553,8 @@ class SherpaSpeechClient(private val context: Context) {
 13. 实现 `AudioDataProvider.kt`: FloatArray → ParcelFileDescriptor pipe
 14. 实现 `ServiceConnectionManager.kt`: startForegroundService + bindService + DeathRecipient + 指数退避重连 + 华为 ROM fallback
 15. 实现 `SherpaSpeechClient.kt`: 对外 API (connect/recognize/cancel/disconnect)
-16. 构建 `.aar` 包
+16. 实现 `AudioRecorderHelper.kt`: 可选内置录音工具（同步/异步录制 + 音量指示）
+17. 构建 `.aar` 包
 
 ### Phase 5: 测试验证 (2-3天, Mate 40e 真机)
 17. 单次短音频 (<10s) 端到端识别测试
@@ -1241,6 +1620,7 @@ class SherpaSpeechClient(private val context: Context) {
 | `android/SherpaOnnxAsrService/client_sdk/src/main/java/.../RecognitionCallback.kt` | 回调接口 (onResult/onError/onServiceDied/onReconnected) |
 | `android/SherpaOnnxAsrService/client_sdk/src/main/java/.../ServiceConnectionManager.kt` | 连接/DeathRecipient/指数退避重连/华为 ROM fallback |
 | `android/SherpaOnnxAsrService/client_sdk/src/main/java/.../AudioDataProvider.kt` | 音频写入 pipe, 传递 ParcelFileDescriptor |
+| `android/SherpaOnnxAsrService/client_sdk/src/main/java/.../AudioRecorderHelper.kt` | [可选] 内置录音工具（降低简单场景接入成本，含同步/异步录制 + 音量指示） |
 | `android/SherpaOnnxAsrService/client_sdk/src/main/java/.../VadSentenceSplitter.kt` | [v2] VAD 断句模块 (Silero/WebRTC) |
 | `android/SherpaOnnxAsrService/asr_service/src/main/java/.../LocalHttpServer.kt` | [v2] 嵌入式 HTTP Server (自有 WebView, CORS + OPTIONS) |
 | `android/SherpaOnnxAsrService/asr_service/src/main/java/.../LocalWebSocketServer.kt` | [v2] 嵌入式 WebSocket Server (流式音频帧) |
