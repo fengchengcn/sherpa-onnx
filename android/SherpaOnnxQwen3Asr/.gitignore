@@ -1,0 +1,18 @@
+# Gradle
+.gradle/
+/local.properties
+app/build/
+*.iml
+.idea/
+*.apk
+output-metadata.json
+
+# JNI libraries (build from source, see jniLibs/README.md)
+app/src/main/jniLibs/**/*.so
+
+# macOS
+.DS_Store
+
+# Temporary files
+*.log
+*.tmp

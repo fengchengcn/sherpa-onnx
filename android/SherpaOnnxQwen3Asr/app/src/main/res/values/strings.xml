@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Qwen3-ASR Demo</string>
+    <string name="hint">点击"开始录音"录制语音，点击"停止录音"后 Qwen3-ASR 0.6B 将进行识别。\n\n识别结果和性能指标将显示在这里。</string>
+    <string name="start">开始录音</string>
+    <string name="stop">停止录音</string>
+    <string name="initializing">正在加载模型，请稍候...</string>
+</resources>

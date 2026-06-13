@@ -1,0 +1,1 @@
+/Users/bxy/Documents/sherpa-onnx/sherpa-onnx/kotlin-api/OfflineRecognizer.kt
