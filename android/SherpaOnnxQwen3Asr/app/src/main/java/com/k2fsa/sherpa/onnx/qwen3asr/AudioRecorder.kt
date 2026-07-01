@@ -5,6 +5,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.sqrt
 
 /**
  * 封装麦克风录音逻辑。
@@ -114,7 +115,27 @@ class AudioRecorder(
         Log.i(TAG, "Recording stopped. Total samples: ${samples.size}, " +
                 "duration: ${samples.size.toDouble() / sampleRate}s")
 
-        return FloatArray(samples.size) { i -> samples[i] / 32768.0f }
+        // RMS diagnostic log — matching MNN's Omni Waveform Stats format
+        val floats = FloatArray(samples.size) { i -> samples[i] / 32768.0f }
+        var sumSq = 0.0
+        var minVal = Float.MAX_VALUE
+        var maxVal = -Float.MAX_VALUE
+        var absSum = 0.0
+        for (s in floats) {
+            sumSq += (s * s).toDouble()
+            if (s < minVal) minVal = s
+            if (s > maxVal) maxVal = s
+            absSum += kotlin.math.abs(s.toDouble())
+        }
+        val rms = sqrt(sumSq / floats.size)
+        val rmsDB = 20.0 * kotlin.math.log10(rms)
+        val avgAbs = absSum / floats.size
+        Log.i(TAG, "Waveform Stats: samples=${floats.size}, min=%.4f, max=%.4f, avg_abs=%.4f"
+            .format(minVal, maxVal, avgAbs))
+        Log.i(TAG, "Audio RMS: %.2f dBFS (raw passthrough, no gain)"
+            .format(rmsDB))
+
+        return floats
     }
 
     fun isRecording(): Boolean = isRecording.get()
